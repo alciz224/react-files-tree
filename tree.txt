@@ -1,74 +1,1456 @@
-my-react-app/
-│
-├── public/
-│   ├── index.html
-│   ├── favicon.ico
-│   └── manifest.json
-│
-├── src/
-│   ├── components/
-│   │   ├── common/
-│   │   │   ├── Button.js
-│   │   │   ├── Input.js
-│   │   │   └── Modal.js
-│   │   ├── layout/
-│   │   │   ├── Header.js
-│   │   │   ├── Footer.js
-│   │   │   └── Sidebar.js
-│   │   └── feature-specific/
-│   │       └── UserProfile.js
-│   │
-│   ├── pages/
-│   │   ├── Home.js
-│   │   ├── About.js
-│   │   ├── Dashboard.js
-│   │   └── NotFound.js
-│   │
-│   ├── hooks/
-│   │   ├── useAuth.js
-│   │   ├── useFetch.js
-│   │   └── useLocalStorage.js
-│   │
-│   ├── context/
-│   │   ├── AuthContext.js
-│   │   └── ThemeContext.js
-│   │
-│   ├── services/
-│   │   ├── api.js
-│   │   ├── authService.js
-│   │   └── userService.js
-│   │
-│   ├── utils/
-│   │   ├── helpers.js
-│   │   └── validation.js
-│   │
-│   ├── styles/
-│   │   ├── global.css
-│   │   ├── variables.css
-│   │   └── theme.css
-│   │
-│   ├── assets/
-│   │   ├── images/
-│   │   └── icons/
-│   │
-│   ├── routes/
-│   │   ├── PrivateRoute.js
-│   │   └── AppRoutes.js
-│   │
-│   ├── redux/ (optional - if using Redux)
-│   │   ├── store.js
-│   │   ├── rootReducer.js
-│   │   └── actions/
-│   │
-│   ├── App.js
-│   └── index.js
-│
-├── tests/
-│   ├── components/
-│   ├── pages/
-│   └── utils/
-│
-├── .gitignore
-├── package.json
-├── README.md
-└── tsconfig.json (or jsconfig.json)
+from django.db import models
+from django.db.models import Q, F, UniqueConstraint, CheckConstraint
+from django.conf import settings
+from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator, MaxValueValidator
+from decimal import Decimal
+from datetime import date
+from django.utils import timezone
+
+
+class TimeStampedModelWithUser(models.Model):
+    """
+    Classe abstraite pour le suivi automatique des créations et modifications
+    avec utilisateur associé.
+    """
+    created_at = models.DateTimeField(
+        auto_now_add=True, 
+        verbose_name=_("Date de création"),
+        db_index=True
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="%(class)s_created",
+        verbose_name=_("Créé par")
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True, 
+        verbose_name=_("Date de mise à jour"),
+        db_index=True
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="%(class)s_updated",
+        verbose_name=_("Modifié par")
+    )
+
+    class Meta:
+        abstract = True
+
+
+class School(TimeStampedModelWithUser):
+    """
+    Modèle représentant un établissement scolaire.
+    """
+    name = models.CharField(
+        max_length=255, 
+        verbose_name=_("Nom de l'établissement"),
+        db_index=True
+    )
+    ville = models.CharField(
+        max_length=100, 
+        verbose_name=_("Ville"),
+        db_index=True
+    )
+    quartier = models.CharField(
+        max_length=100, 
+        verbose_name=_("Quartier")
+    )
+    logo = models.ImageField(
+        upload_to="school_logos/%Y/",
+        default="defaults/school_logo.png",
+        blank=True,
+        verbose_name=_("Logo de l'établissement")
+    )
+    document_header = models.ImageField(
+        upload_to="school_headers/%Y/",
+        blank=True,
+        null=True,
+        verbose_name=_("En-tête des documents")
+    )
+    foundation_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name=_("Date de fondation")
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("École active")
+    )
+
+    class Meta:
+        verbose_name = _("Établissement scolaire")
+        verbose_name_plural = _("Établissements scolaires")
+        constraints = [
+            UniqueConstraint(
+                fields=['name', 'ville', 'quartier'],
+                name='unique_school_location'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['name', 'ville']),
+            models.Index(fields=['is_active', 'created_at']),
+        ]
+
+    def clean(self):
+        """Validation métier pour l'école"""
+        super().clean()
+        if self.foundation_date and self.foundation_date > date.today():
+            raise ValidationError({
+                'foundation_date': _("La date de fondation ne peut pas être dans le futur.")
+            })
+
+    def __str__(self):
+        return f"{self.name} - {self.quartier}, {self.ville}"
+
+
+class SchoolYear(TimeStampedModelWithUser):
+    """
+    Année scolaire avec validation robuste des dates.
+    """
+    school = models.ForeignKey(
+        "School", 
+        on_delete=models.CASCADE, 
+        related_name="school_years", 
+        verbose_name=_("Établissement")
+    )
+    start_date = models.DateField(verbose_name=_("Date de début"))
+    end_date = models.DateField(verbose_name=_("Date de fin"))
+    name = models.CharField(
+        max_length=20, 
+        editable=False, 
+        verbose_name=_("Nom de l'année scolaire"),
+        db_index=True
+    )
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name=_("Année active"),
+        help_text=_("Une seule année peut être active par école")
+    )
+
+    class Meta:
+        verbose_name = _("Année scolaire")
+        verbose_name_plural = _("Années scolaires")
+        constraints = [
+            UniqueConstraint(
+                fields=['school', 'name'],
+                name='unique_school_year_name'
+            ),
+            UniqueConstraint(
+                fields=['school'],
+                condition=Q(is_active=True),
+                name='unique_active_school_year'
+            ),
+            CheckConstraint(
+                check=Q(end_date__gt=F('start_date')),
+                name='end_date_after_start_date'
+            )
+        ]
+        ordering = ["-start_date"]
+        indexes = [
+            models.Index(fields=['school', 'is_active']),
+            models.Index(fields=['start_date', 'end_date']),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Auto-génération de end_date si non fournie
+        if self.start_date and not self.end_date:
+            self.end_date = self.start_date.replace(year=self.start_date.year + 1)
+
+        # Génération automatique du nom
+        if self.start_date and self.end_date:
+            self.name = f"{self.start_date.year}-{self.end_date.year}"
+
+        # Validation avant sauvegarde
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        """Validation métier pour l'année scolaire"""
+        super().clean()
+        
+        if self.start_date and self.end_date:
+            if self.end_date <= self.start_date:
+                raise ValidationError({
+                    'end_date': _("La date de fin doit être postérieure à la date de début.")
+                })
+            
+            # Vérification des chevauchements
+            overlapping = SchoolYear.objects.filter(
+                school=self.school,
+                start_date__lt=self.end_date,
+                end_date__gt=self.start_date
+            )
+            if self.pk:
+                overlapping = overlapping.exclude(pk=self.pk)
+            
+            if overlapping.exists():
+                raise ValidationError(
+                    _("Cette année scolaire chevauche avec une autre année existante.")
+                )
+
+    def __str__(self):
+        return f"{self.name} ({self.school})"
+
+
+class Grade(TimeStampedModelWithUser):
+    """
+    Cycle scolaire (Primaire, Collège, Lycée) avec gestion des options.
+    """
+    school = models.ForeignKey(
+        "School",
+        on_delete=models.CASCADE,
+        related_name="grades",
+        verbose_name=_("École")
+    )
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Nom du cycle"),
+        db_index=True
+    )
+    has_option = models.BooleanField(
+        default=False,
+        verbose_name=_("A des options"),
+        help_text=_("Si ce cycle peut avoir des options spécialisées")
+    )
+    abbreviation = models.CharField(
+        max_length=20,
+        verbose_name=_("Abréviation"),
+        blank=True
+    )
+    order = models.PositiveSmallIntegerField(
+        verbose_name=_("Ordre d'affichage"),
+        help_text=_("Numéro pour organiser les cycles"),
+        validators=[MinValueValidator(1)]
+    )
+    min_age = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name=_("Âge minimum"),
+        validators=[MinValueValidator(3), MaxValueValidator(25)]
+    )
+    max_age = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name=_("Âge maximum"),
+        validators=[MinValueValidator(3), MaxValueValidator(25)]
+    )
+
+    class Meta:
+        verbose_name = _("Cycle")
+        verbose_name_plural = _("Cycles")
+        constraints = [
+            UniqueConstraint(
+                fields=['school', 'name'],
+                name='unique_grade_per_school'
+            ),
+            UniqueConstraint(
+                fields=['school', 'order'],
+                name='unique_grade_order_per_school'
+            ),
+            CheckConstraint(
+                check=Q(max_age__gte=F('min_age')) | Q(min_age__isnull=True) | Q(max_age__isnull=True),
+                name='valid_age_range'
+            )
+        ]
+        ordering = ["school", "order"]
+        indexes = [
+            models.Index(fields=['school', 'order']),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.min_age and self.max_age and self.max_age < self.min_age:
+            raise ValidationError({
+                'max_age': _("L'âge maximum doit être supérieur ou égal à l'âge minimum.")
+            })
+
+    def __str__(self):
+        return f"{self.name} ({self.school})"
+
+
+class GradeOption(TimeStampedModelWithUser):
+    """
+    Options spécifiques à un cycle (Sciences, Lettres, Techniques).
+    """
+    grade = models.ForeignKey(
+        "Grade",
+        on_delete=models.CASCADE,
+        related_name="options",
+        verbose_name=_("Cycle")
+    )
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Nom de l'option")
+    )
+    abbreviation = models.CharField(
+        max_length=20,
+        verbose_name=_("Abréviation"),
+        blank=True
+    )
+    order = models.PositiveSmallIntegerField(
+        verbose_name=_("Ordre"),
+        help_text=_("Numéro pour organiser les options"),
+        validators=[MinValueValidator(1)]
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Option active")
+    )
+
+    class Meta:
+        verbose_name = _("Option du cycle")
+        verbose_name_plural = _("Options des cycles")
+        constraints = [
+            UniqueConstraint(
+                fields=['grade', 'name'],
+                name='unique_option_per_grade'
+            ),
+            UniqueConstraint(
+                fields=['grade', 'order'],
+                name='unique_option_order_per_grade'
+            )
+        ]
+        ordering = ["grade", "order"]
+
+    def clean(self):
+        super().clean()
+        if not self.grade.has_option:
+            raise ValidationError(
+                _("Ce cycle ne permet pas d'avoir des options.")
+            )
+
+    def __str__(self):
+        return f"{self.name} ({self.grade})"
+
+
+class Level(TimeStampedModelWithUser):
+    """
+    Niveau d'étude dans un cycle (6e, 5e, Terminale).
+    """
+    grade = models.ForeignKey(
+        "Grade",
+        on_delete=models.CASCADE,
+        related_name="levels",
+        verbose_name=_("Cycle")
+    )
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Nom du niveau")
+    )
+    abbreviation = models.CharField(
+        max_length=20,
+        verbose_name=_("Abréviation"),
+        blank=True
+    )
+    order = models.PositiveSmallIntegerField(
+        verbose_name=_("Ordre"),
+        help_text=_("Numéro pour organiser les niveaux"),
+        validators=[MinValueValidator(1)]
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Niveau actif")
+    )
+
+    class Meta:
+        verbose_name = _("Niveau")
+        verbose_name_plural = _("Niveaux")
+        constraints = [
+            UniqueConstraint(
+                fields=['grade', 'name'],
+                name='unique_level_per_grade'
+            ),
+            UniqueConstraint(
+                fields=['grade', 'order'],
+                name='unique_level_order_per_grade'
+            )
+        ]
+        ordering = ["grade", "order"]
+
+    def __str__(self):
+        return f"{self.name} ({self.grade})"
+
+
+class SchoolYearLevel(TimeStampedModelWithUser):
+    """
+    Association d'un niveau à une année scolaire spécifique.
+    """
+    school_year = models.ForeignKey(
+        SchoolYear,
+        on_delete=models.CASCADE,
+        related_name='school_year_levels',
+        verbose_name=_("Année scolaire"),
+    )
+    grade = models.ForeignKey(
+        Grade,
+        on_delete=models.CASCADE,
+        related_name='school_year_levels',
+        verbose_name=_("Cycle"),
+    )
+    level = models.ForeignKey(
+        Level,
+        on_delete=models.CASCADE,
+        related_name='school_year_levels',
+        verbose_name=_("Niveau"),
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Actif"),
+        help_text=_("Active ou désactive ce niveau pour cette année scolaire.")
+    )
+    max_students = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name=_("Nombre maximum d'élèves"),
+        validators=[MinValueValidator(1), MaxValueValidator(200)]
+    )
+
+    class Meta:
+        verbose_name = _("Niveau scolaire annuel")
+        verbose_name_plural = _("Niveaux scolaires annuels")
+        constraints = [
+            UniqueConstraint(
+                fields=['school_year', 'level'],
+                name='unique_level_per_school_year'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['school_year', 'is_active']),
+        ]
+
+    def clean(self):
+        super().clean()
+        
+        # Le niveau doit appartenir au cycle spécifié
+        if self.level and self.grade and self.level.grade != self.grade:
+            raise ValidationError({
+                'level': _("Le niveau sélectionné n'appartient pas au cycle spécifié.")
+            })
+
+        # Le cycle doit appartenir à la même école que l'année scolaire
+        if self.grade and self.school_year and self.grade.school != self.school_year.school:
+            raise ValidationError({
+                'grade': _("Le cycle sélectionné n'appartient pas au même établissement que l'année scolaire.")
+            })
+
+    def __str__(self):
+        return f"{self.level} ({self.school_year})"
+
+
+class Classroom(TimeStampedModelWithUser):
+    """
+    Classe avec gestion robuste des options et contraintes uniques.
+    """
+    school_year_level = models.ForeignKey(
+        'SchoolYearLevel',
+        on_delete=models.CASCADE,
+        related_name='classrooms',
+        verbose_name=_("Niveau annuel"),
+    )
+    name = models.CharField(
+        max_length=50,
+        verbose_name=_("Nom de la classe"),
+        help_text=_("Ex: A, B, C"),
+    )
+    grade_option = models.ForeignKey(
+        'GradeOption',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='classrooms',
+        verbose_name=_("Option"),
+        help_text=_("Option du cycle, ex: Sciences, Lettres..."),
+    )
+    max_capacity = models.PositiveSmallIntegerField(
+        default=40,
+        verbose_name=_("Capacité maximale"),
+        validators=[MinValueValidator(1), MaxValueValidator(100)]
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Classe active")
+    )
+
+    class Meta:
+        verbose_name = _("Classe")
+        verbose_name_plural = _("Classes")
+        constraints = [
+            UniqueConstraint(
+                fields=["school_year_level", "name"],
+                condition=Q(grade_option__isnull=True),
+                name="unique_classroom_without_option",
+            ),
+            UniqueConstraint(
+                fields=["school_year_level", "name", "grade_option"],
+                condition=Q(grade_option__isnull=False),
+                name="unique_classroom_with_option"
+            )
+        ]
+        indexes = [
+            models.Index(fields=['school_year_level', 'is_active']),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        # Validation des options
+        grade_has_option = self.school_year_level.grade.has_option
+        if grade_has_option and not self.grade_option:
+            raise ValidationError({
+                'grade_option': _("Cette classe requiert une option car le cycle en permet.")
+            })
+        if not grade_has_option and self.grade_option:
+            raise ValidationError({
+                'grade_option': _("Cette classe ne peut pas avoir d'option car le cycle ne le permet pas.")
+            })
+
+        # L'option doit correspondre au cycle
+        if self.grade_option and self.grade_option.grade != self.school_year_level.grade:
+            raise ValidationError({
+                'grade_option': _("L'option ne correspond pas au cycle de ce niveau.")
+            })
+
+        # Vérifier que l'option est active
+        if self.grade_option and not self.grade_option.is_active:
+            raise ValidationError({
+                'grade_option': _("L'option sélectionnée n'est pas active.")
+            })
+
+    @property
+    def full_name(self):
+        """Nom complet de la classe"""
+        level_name = self.school_year_level.level.name
+        if self.grade_option:
+            return f"{level_name} {self.grade_option.abbreviation or self.grade_option.name} {self.name}"
+        return f"{level_name} - {self.name}"
+
+    def __str__(self):
+        return self.full_name
+
+
+class Subject(TimeStampedModelWithUser):
+    """
+    Matière définie pour une année scolaire spécifique.
+    """
+    school_year = models.ForeignKey(
+        SchoolYear,
+        on_delete=models.CASCADE,
+        related_name="subjects",
+        verbose_name=_("Année scolaire")
+    )
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Nom de la matière"),
+        db_index=True
+    )
+    code = models.CharField(
+        max_length=20,
+        verbose_name=_("Code matière"),
+        blank=True,
+        help_text=_("Code court pour la matière (ex: MATH, PHYS)")
+    )
+    description = models.TextField(
+        blank=True,
+        verbose_name=_("Description")
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Matière active")
+    )
+
+    class Meta:
+        verbose_name = _("Matière annuelle")
+        verbose_name_plural = _("Matières annuelles")
+        constraints = [
+            UniqueConstraint(
+                fields=["school_year", "name"],
+                name="unique_subject_per_year"
+            ),
+            UniqueConstraint(
+                fields=["school_year", "code"],
+                condition=Q(code__isnull=False) & ~Q(code=""),
+                name="unique_subject_code_per_year"
+            )
+        ]
+        ordering = ["name"]
+        indexes = [
+            models.Index(fields=['school_year', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.school_year.name})"
+
+
+class ClassroomSubject(TimeStampedModelWithUser):
+    """
+    Association matière-classe avec coefficient et note maximale.
+    """
+    classroom = models.ForeignKey(
+        "Classroom",
+        on_delete=models.CASCADE,
+        related_name="classroom_subjects",
+        verbose_name=_("Classe")
+    )
+    subject = models.ForeignKey(
+        "Subject",
+        on_delete=models.CASCADE,
+        related_name="classroom_subjects",
+        verbose_name=_("Matière")
+    )
+    coefficient = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal('1.00'),
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('20.00'))],
+        verbose_name=_("Coefficient")
+    )
+    max_score = models.PositiveSmallIntegerField(
+        default=20,
+        verbose_name=_("Note maximale possible"),
+        validators=[MinValueValidator(1), MaxValueValidator(100)]
+    )
+    hours_per_week = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        verbose_name=_("Heures par semaine"),
+        validators=[MinValueValidator(1), MaxValueValidator(20)]
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Association active")
+    )
+
+    class Meta:
+        verbose_name = _("Matière en classe")
+        verbose_name_plural = _("Matières en classe")
+        constraints = [
+            UniqueConstraint(
+                fields=["classroom", "subject"],
+                name="unique_subject_per_classroom"
+            )
+        ]
+        indexes = [
+            models.Index(fields=['classroom', 'is_active']),
+        ]
+
+    def clean(self):
+        super().clean()
+        
+        # Vérifier la correspondance des années scolaires
+        classroom_sy = self.classroom.school_year_level.school_year
+        subject_sy = self.subject.school_year
+
+        if subject_sy != classroom_sy:
+            raise ValidationError({
+                'subject': _("La matière et la classe doivent appartenir à la même année scolaire.")
+            })
+
+        if not self.subject.is_active:
+            raise ValidationError({
+                'subject': _("La matière sélectionnée n'est pas active.")
+            })
+
+    def __str__(self):
+        return f"{self.subject.name} - {self.classroom.full_name}"
+
+
+class Teacher(TimeStampedModelWithUser):
+    """
+    Profil enseignant pour une année scolaire donnée.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="teacher_profiles",
+        verbose_name=_("Utilisateur"),
+    )
+    school_year = models.ForeignKey(
+        SchoolYear,
+        on_delete=models.CASCADE,
+        related_name="teachers",
+        verbose_name=_("Année scolaire"),
+    )
+    specialties = models.ManyToManyField(
+        Subject,
+        blank=True,
+        verbose_name=_("Spécialités"),
+        help_text=_("Matières que l'enseignant peut enseigner")
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Enseignant actif")
+    )
+
+    class Meta:
+        verbose_name = _("Enseignant")
+        verbose_name_plural = _("Enseignants")
+        constraints = [
+            UniqueConstraint(
+                fields=["user", "school_year"],
+                name="unique_teacher_per_school_year"
+            )
+        ]
+        indexes = [
+            models.Index(fields=['school_year', 'is_active']),
+        ]
+
+    def clean(self):
+        super().clean()
+        
+        # Vérifier qu'un utilisateur n'est pas élève ET enseignant la même année
+        if hasattr(self.user, "student_profile"):
+            from django.apps import apps
+            Enrollment = apps.get_model('core', 'Enrollment')
+            
+            if Enrollment.objects.filter(
+                student__user=self.user,
+                school_year=self.school_year
+            ).exists():
+                raise ValidationError(
+                    _("Un utilisateur ne peut pas être enseignant dans une année scolaire où il est élève.")
+                )
+
+    def __str__(self):
+        return f"{self.user.get_full_name() or self.user.username} - {self.school_year.name}"
+
+
+class Student(TimeStampedModelWithUser):
+    """
+    Profil étudiant avec informations personnelles.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="student_profile",
+        verbose_name=_("Utilisateur")
+    )
+    first_name = models.CharField(
+        max_length=100, 
+        verbose_name=_("Prénom"),
+        db_index=True
+    )
+    last_name = models.CharField(
+        max_length=100, 
+        verbose_name=_("Nom de famille"),
+        db_index=True
+    )
+    date_of_birth = models.DateField(verbose_name=_("Date de naissance"))
+    place_of_birth = models.CharField(
+        max_length=100, 
+        verbose_name=_("Lieu de naissance")
+    )
+    gender = models.CharField(
+        max_length=1,
+        choices=[("M", _("Masculin")), ("F", _("Féminin"))],
+        verbose_name=_("Sexe")
+    )
+    student_id = models.CharField(
+        max_length=20,
+        unique=True,
+        verbose_name=_("Numéro étudiant"),
+        help_text=_("Identifiant unique de l'élève")
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Élève actif")
+    )
+
+    class Meta:
+        verbose_name = _("Élève")
+        verbose_name_plural = _("Élèves")
+        indexes = [
+            models.Index(fields=['last_name', 'first_name']),
+            models.Index(fields=['student_id']),
+            models.Index(fields=['is_active', 'created_at']),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.date_of_birth and self.date_of_birth > date.today():
+            raise ValidationError({
+                'date_of_birth': _("La date de naissance ne peut pas être dans le futur.")
+            })
+
+    @property
+    def full_name(self):
+        return f"{self.last_name.upper()} {self.first_name.title()}"
+
+    @property
+    def age(self):
+        """Calcule l'âge de l'élève"""
+        today = date.today()
+        return today.year - self.date_of_birth.year - (
+            (today.month, today.day) < (self.date_of_birth.month, self.date_of_birth.day)
+        )
+
+    def __str__(self):
+        return self.full_name
+
+
+class Enrollment(TimeStampedModelWithUser):
+    """
+    Inscription d'un élève dans une classe pour une année scolaire.
+    """
+    student = models.ForeignKey(
+        "Student", 
+        on_delete=models.CASCADE, 
+        related_name="enrollments",
+        verbose_name=_("Élève")
+    )
+    classroom = models.ForeignKey(
+        "Classroom", 
+        on_delete=models.PROTECT, 
+        related_name="enrollments",
+        verbose_name=_("Classe")
+    )
+    school_year = models.ForeignKey(
+        "SchoolYear", 
+        on_delete=models.PROTECT, 
+        related_name="enrollments",
+        verbose_name=_("Année scolaire")
+    )
+    enrollment_date = models.DateField(
+        auto_now_add=True,
+        verbose_name=_("Date d'inscription")
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Inscription active")
+    )
+
+    class Meta:
+        verbose_name = _("Inscription")
+        verbose_name_plural = _("Inscriptions")
+        constraints = [
+            UniqueConstraint(
+                fields=["student", "school_year"],
+                name="unique_student_per_school_year"
+            )
+        ]
+        indexes = [
+            models.Index(fields=['school_year', 'is_active']),
+            models.Index(fields=['classroom', 'is_active']),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        # L'année scolaire de la classe doit correspondre à celle de l'inscription
+        if self.classroom.school_year_level.school_year != self.school_year:
+            raise ValidationError({
+                "classroom": _("La classe sélectionnée n'appartient pas à l'année scolaire de l'inscription.")
+            })
+
+        # Vérifier la capacité de la classe
+        if self.is_active:
+            current_enrollments = self.__class__.objects.filter(
+                classroom=self.classroom,
+                is_active=True
+            ).exclude(pk=self.pk) if self.pk else self.__class__.objects.filter(
+                classroom=self.classroom,
+                is_active=True
+            )
+            
+            if current_enrollments.count() >= self.classroom.max_capacity:
+                raise ValidationError({
+                    "classroom": _("La classe a atteint sa capacité maximale.")
+                })
+
+        # Vérifier l'âge de l'élève par rapport au cycle
+        grade = self.classroom.school_year_level.grade
+        student_age = self.student.age
+        
+        if grade.min_age and student_age < grade.min_age:
+            raise ValidationError({
+                "student": _("L'élève est trop jeune pour ce cycle (minimum: %(min_age)s ans).") % {
+                    "min_age": grade.min_age
+                }
+            })
+        
+        if grade.max_age and student_age > grade.max_age:
+            raise ValidationError({
+                "student": _("L'élève est trop âgé pour ce cycle (maximum: %(max_age)s ans).") % {
+                    "max_age": grade.max_age
+                }
+            })
+
+    def __str__(self):
+        return f"{self.student.full_name} - {self.classroom.full_name} ({self.school_year.name})"
+
+
+class EvaluationType(TimeStampedModelWithUser):
+    """
+    Type d'évaluation (Contrôle continu, Examen, etc.) avec scope configurable.
+    """
+    school_year = models.ForeignKey(
+        "SchoolYear", 
+        on_delete=models.CASCADE,
+        related_name="evaluation_types",
+        verbose_name=_("Année scolaire")
+    )
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Nom du type d'évaluation"),
+        db_index=True
+    )
+    code = models.CharField(
+        max_length=20,
+        verbose_name=_("Code"),
+        blank=True,
+        help_text=_("Code court (ex: CC, EXAM)")
+    )
+    is_official = models.BooleanField(
+        default=False,
+        verbose_name=_("Évaluation officielle"),
+        help_text=_("Compte pour les bulletins officiels")
+    )
+    grade = models.ForeignKey(
+        "Grade", 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name="evaluation_types",
+        verbose_name=_("Cycle spécifique")
+    )
+    school_year_level = models.ForeignKey(
+        "SchoolYearLevel", 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name="evaluation_types",
+        verbose_name=_("Niveau spécifique")
+    )
+    weight = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('1.00'),
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('10.00'))],
+        verbose_name=_("Poids dans la moyenne"),
+        help_text=_("Coefficient appliqué aux notes de ce type")
+    )
+    order = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name=_("Ordre d'affichage"),
+        validators=[MinValueValidator(1)]
+    )
+
+    class Meta:
+        verbose_name = _("Type d'évaluation")
+        verbose_name_plural = _("Types d'évaluation")
+        constraints = [
+            UniqueConstraint(
+                fields=["school_year", "name"],
+                name="unique_evaluation_type_per_year"
+            ),
+            UniqueConstraint(
+                fields=["school_year", "code"],
+                condition=Q(code__isnull=False) & ~Q(code=""),
+                name="unique_evaluation_type_code_per_year"
+            )
+        ]
+        ordering = ["school_year", "order", "name"]
+        indexes = [
+            models.Index(fields=['school_year', 'is_official']),
+        ]
+
+    def clean(self):
+        super().clean()
+        
+        # Validation des contraintes de scope
+        if self.grade and self.grade.school != self.school_year.school:
+            raise ValidationError({
+                'grade': _("Le cycle sélectionné n'appartient pas à l'année scolaire spécifiée.")
+            })
+
+        if self.school_year_level and self.school_year_level.school_year != self.school_year:
+            raise ValidationError({
+                'school_year_level': _("Le niveau sélectionné n'appartient pas à l'année scolaire spécifiée.")
+            })
+
+        if self.grade and self.school_year_level and self.school_year_level.grade != self.grade:
+            raise ValidationError(
+                _("Le niveau sélectionné doit appartenir au cycle spécifié.")
+            )
+
+    def __str__(self):
+        scope = ""
+        if self.school_year_level:
+            scope = f" ({self.school_year_level.level.name})"
+        elif self.grade:
+            scope = f" ({self.grade.name})"
+        
+        return f"{self.name}{scope} {'[Officiel]' if self.is_official else '[Interne]'}"
+
+
+class MarkType(TimeStampedModelWithUser):
+    """
+    Type de note au sein d'un type d'évaluation (Devoir, Interrogation, etc.).
+    """
+    evaluation_type = models.ForeignKey(
+        'EvaluationType', 
+        on_delete=models.CASCADE, 
+        related_name='mark_types',
+        verbose_name=_("Type d'évaluation")
+    )
+    name = models.CharField(
+        max_length=100, 
+        verbose_name=_("Libellé")
+    )
+    code = models.CharField(
+        max_length=20,
+        verbose_name=_("Code"),
+        blank=True
+    )
+    is_coef = models.BooleanField(
+        default=True, 
+        verbose_name=_("Coefficientée"),
+        help_text=_("Cette note compte-t-elle dans la moyenne ?")
+    )
+    default_coefficient = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal('1.00'),
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('20.00'))],
+        verbose_name=_("Coefficient par défaut")
+    )
+    order = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name=_("Ordre d'affichage"),
+        validators=[MinValueValidator(1)]
+    )
+
+    class Meta:
+        verbose_name = _("Type de note")
+        verbose_name_plural = _("Types de note")
+        constraints = [
+            UniqueConstraint(
+                fields=['evaluation_type', 'name'],
+                name='unique_mark_type_per_evaluation'
+            ),
+            UniqueConstraint(
+                fields=['evaluation_type', 'code'],
+                condition=Q(code__isnull=False) & ~Q(code=""),
+                name='unique_mark_type_code_per_evaluation'
+            )
+        ]
+        ordering = ['evaluation_type', 'order', 'name']
+
+    def __str__(self):
+        return f"{self.name} ({self.evaluation_type.name})"
+
+
+class Evaluation(TimeStampedModelWithUser):
+    """
+    Note attribuée à un élève pour une matière spécifique.
+    """
+    evaluation_type = models.ForeignKey(
+        'EvaluationType', 
+        on_delete=models.PROTECT, 
+        related_name='evaluations',
+        verbose_name=_("Type d'évaluation")
+    )
+    mark_type = models.ForeignKey(
+        'MarkType', 
+        on_delete=models.PROTECT, 
+        related_name='evaluations',
+        verbose_name=_("Type de note")
+    )
+    classroom_subject = models.ForeignKey(
+        'ClassroomSubject', 
+        on_delete=models.PROTECT, 
+        related_name='evaluations',
+        verbose_name=_("Matière de classe")
+    )
+    enrollment = models.ForeignKey(
+        'Enrollment', 
+        on_delete=models.PROTECT, 
+        related_name='evaluations',
+        verbose_name=_("Inscription")
+    )
+    score = models.DecimalField(
+        max_digits=5, 
+        decimal_places=2, 
+        verbose_name=_("Note obtenue"),
+        validators=[MinValueValidator(Decimal('0.00'))]
+    )
+    max_score = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        verbose_name=_("Note maximale"),
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text=_("Note maximale possible pour cette évaluation")
+    )
+    coefficient = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("Coefficient spécifique"),
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('20.00'))],
+        help_text=_("Laissez vide pour utiliser le coefficient par défaut")
+    )
+    is_validated = models.BooleanField(
+        default=False, 
+        verbose_name=_("Validée"),
+        help_text=_("Note validée par l'enseignant")
+    )
+    comments = models.TextField(
+        blank=True,
+        verbose_name=_("Commentaires"),
+        help_text=_("Observations sur cette évaluation")
+    )
+
+    class Meta:
+        verbose_name = _("Évaluation")
+        verbose_name_plural = _("Évaluations")
+        constraints = [
+            UniqueConstraint(
+                fields=[
+                    'enrollment',
+                    'classroom_subject',
+                    'evaluation_type',
+                    'mark_type',
+                ],
+                name='unique_student_evaluation_per_type'
+            ),
+            CheckConstraint(
+                check=Q(score__lte=F('max_score')),
+                name='score_not_greater_than_max'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['enrollment', 'created_at']),
+            models.Index(fields=['classroom_subject', 'is_validated']),
+            models.Index(fields=['evaluation_type', 'mark_type']),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        # Validation de la cohérence mark_type <-> evaluation_type
+        if self.mark_type.evaluation_type != self.evaluation_type:
+            raise ValidationError({
+                "mark_type": _("Ce type de note ne correspond pas au type d'évaluation sélectionné.")
+            })
+
+        # Validation du score
+        if self.score > self.max_score:
+            raise ValidationError({
+                "score": _("La note ne peut pas dépasser le maximum de %(max)s.") % {
+                    "max": self.max_score
+                }
+            })
+
+        # Validation de la cohérence élève-classe-matière
+        if self.enrollment.classroom != self.classroom_subject.classroom:
+            raise ValidationError({
+                "classroom_subject": _("La matière ne correspond pas à la classe de l'élève.")
+            })
+
+        # Validation du scope du type d'évaluation
+        enrollment_level = self.enrollment.classroom.school_year_level
+        
+        if self.evaluation_type.school_year_level and self.evaluation_type.school_year_level != enrollment_level:
+            raise ValidationError({
+                "evaluation_type": _("Ce type d'évaluation n'est pas applicable à ce niveau.")
+            })
+        
+        if self.evaluation_type.grade and self.evaluation_type.grade != enrollment_level.grade:
+            raise ValidationError({
+                "evaluation_type": _("Ce type d'évaluation n'est pas applicable à ce cycle.")
+            })
+
+    @property
+    def effective_coefficient(self):
+        """Retourne le coefficient effectif (spécifique ou par défaut)"""
+        return self.coefficient or self.mark_type.default_coefficient
+
+    @property
+    def normalized_score(self):
+        """Score normalisé sur 20"""
+        if self.max_score and self.max_score != 20:
+            return (self.score * 20) / self.max_score
+        return self.score
+
+    def save(self, *args, **kwargs):
+        # Auto-remplissage de max_score si pas fourni
+        if not self.max_score:
+            self.max_score = self.classroom_subject.max_score
+        
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.enrollment.student.full_name} - {self.classroom_subject.subject.name} - {self.mark_type.name}: {self.score}/{self.max_score}"
+
+
+class TimeTablePeriod(TimeStampedModelWithUser):
+    """
+    Période d'emploi du temps (Trimestre, Semestre, etc.).
+    """
+    name = models.CharField(
+        max_length=100, 
+        verbose_name=_("Nom de la période"),
+        db_index=True
+    )
+    school_year = models.ForeignKey(
+        "SchoolYear", 
+        on_delete=models.CASCADE, 
+        related_name="timetable_periods",
+        verbose_name=_("Année scolaire")
+    )
+    start_date = models.DateField(
+        verbose_name=_("Date de début")
+    )
+    end_date = models.DateField(
+        verbose_name=_("Date de fin")
+    )
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name=_("Période active"),
+        help_text=_("Une seule période peut être active par année scolaire")
+    )
+    order = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name=_("Ordre"),
+        validators=[MinValueValidator(1)]
+    )
+
+    class Meta:
+        verbose_name = _("Période d'emploi du temps")
+        verbose_name_plural = _("Périodes d'emploi du temps")
+        constraints = [
+            UniqueConstraint(
+                fields=['name', 'school_year'],
+                name='unique_period_per_school_year'
+            ),
+            UniqueConstraint(
+                fields=['school_year'],
+                condition=Q(is_active=True),
+                name='unique_active_period_per_school_year'
+            ),
+            CheckConstraint(
+                check=Q(end_date__gt=F('start_date')),
+                name='period_end_after_start'
+            )
+        ]
+        ordering = ['school_year', 'order']
+        indexes = [
+            models.Index(fields=['school_year', 'is_active']),
+        ]
+
+    def clean(self):
+        super().clean()
+        
+        # Validation des dates dans l'année scolaire
+        if (self.start_date < self.school_year.start_date or 
+            self.end_date > self.school_year.end_date):
+            raise ValidationError(
+                _("La période doit être comprise dans l'année scolaire.")
+            )
+        
+        # Validation des dates
+        if self.end_date <= self.start_date:
+            raise ValidationError({
+                'end_date': _("La date de fin doit être postérieure à la date de début.")
+            })
+
+    def __str__(self):
+        return f"{self.name} - {self.school_year}"
+
+
+class TimeTableEntry(TimeStampedModelWithUser):
+    """
+    Entrée d'emploi du temps avec validations complètes.
+    """
+    DAY_CHOICES = [
+        ('1', _('Lundi')),
+        ('2', _('Mardi')),
+        ('3', _('Mercredi')),
+        ('4', _('Jeudi')),
+        ('5', _('Vendredi')),
+        ('6', _('Samedi')),
+        ('7', _('Dimanche')),
+    ]
+
+    SLOT_CHOICES = [
+        ('1', _('1ère Heure')),
+        ('2', _('2ème Heure')),
+        ('3', _('3ème Heure')),
+        ('4', _('4ème Heure')),
+        ('5', _('5ème Heure')),
+        ('6', _('6ème Heure')),
+        ('7', _('7ème Heure')),
+        ('8', _('8ème Heure')),
+    ]
+
+    period = models.ForeignKey(
+        "TimeTablePeriod", 
+        on_delete=models.CASCADE, 
+        related_name="timetable_entries",
+        verbose_name=_("Période")
+    )
+    classroom = models.ForeignKey(
+        "Classroom", 
+        on_delete=models.CASCADE, 
+        related_name="timetable_entries",
+        verbose_name=_("Classe")
+    )
+    classroom_subject = models.ForeignKey(
+        "ClassroomSubject", 
+        on_delete=models.CASCADE, 
+        related_name="timetable_entries",
+        verbose_name=_("Matière")
+    )
+    teacher = models.ForeignKey(
+        "Teacher", 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name="timetable_entries",
+        verbose_name=_("Enseignant")
+    )
+    day = models.CharField(
+        max_length=1, 
+        choices=DAY_CHOICES, 
+        verbose_name=_("Jour")
+    )
+    slot = models.CharField(
+        max_length=1, 
+        choices=SLOT_CHOICES, 
+        verbose_name=_("Plage horaire")
+    )
+    start_time = models.TimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Heure de début")
+    )
+    end_time = models.TimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Heure de fin")
+    )
+    room = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("Salle de classe")
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Créneau actif")
+    )
+
+    class Meta:
+        verbose_name = _("Entrée d'emploi du temps")
+        verbose_name_plural = _("Entrées d'emploi du temps")
+        constraints = [
+            UniqueConstraint(
+                fields=['period', 'classroom', 'day', 'slot'],
+                name='unique_classroom_schedule_slot'
+            ),
+            CheckConstraint(
+                check=Q(end_time__gt=F('start_time')) | Q(start_time__isnull=True) | Q(end_time__isnull=True),
+                name='valid_time_range'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['period', 'day', 'slot']),
+            models.Index(fields=['teacher', 'period']),
+            models.Index(fields=['classroom', 'period']),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        # Validation de la cohérence année scolaire
+        classroom_sy = self.classroom.school_year_level.school_year
+        period_sy = self.period.school_year
+        
+        if classroom_sy != period_sy:
+            raise ValidationError({
+                "period": _("La période et la classe doivent appartenir à la même année scolaire.")
+            })
+
+        # Validation de la matière pour cette classe
+        if self.classroom_subject.classroom != self.classroom:
+            raise ValidationError({
+                "classroom_subject": _("Cette matière n'est pas enseignée dans cette classe.")
+            })
+
+        # Validation de l'enseignant
+        if self.teacher:
+            if self.teacher.school_year != self.period.school_year:
+                raise ValidationError({
+                    "teacher": _("L'enseignant n'appartient pas à la même année scolaire que la période.")
+                })
+                
+            # Vérifier que l'enseignant est actif
+            if not self.teacher.is_active:
+                raise ValidationError({
+                    "teacher": _("L'enseignant n'est pas actif.")
+                })
+
+            # Prévention des conflits d'enseignant
+            conflicting_entries = TimeTableEntry.objects.filter(
+                period=self.period,
+                day=self.day,
+                slot=self.slot,
+                teacher=self.teacher,
+                is_active=True
+            )
+            if self.pk:
+                conflicting_entries = conflicting_entries.exclude(pk=self.pk)
+            
+            if conflicting_entries.exists():
+                raise ValidationError({
+                    "teacher": _("Cet enseignant a déjà un cours assigné à ce créneau.")
+                })
+
+            # Validation des spécialités de l'enseignant
+            if (self.teacher.specialties.exists() and 
+                not self.teacher.specialties.filter(id=self.classroom_subject.subject.id).exists()):
+                raise ValidationError({
+                    "teacher": _("Cet enseignant n'a pas cette matière dans ses spécialités.")
+                })
+
+        # Validation des heures
+        if self.start_time and self.end_time:
+            if self.end_time <= self.start_time:
+                raise ValidationError({
+                    "end_time": _("L'heure de fin doit être postérieure à l'heure de début.")
+                })
+
+    def __str__(self):
+        teacher_info = f" ({self.teacher.user.get_full_name()})" if self.teacher else ""
+        return f"{self.classroom.full_name} - {self.get_day_display()} {self.get_slot_display()} - {self.classroom_subject.subject.name}{teacher_info}"
+
+
+# Signaux pour maintenir la cohérence des données
+from django.db.models.signals import pre_save
+from django.dispatch import receiver
+
+@receiver(pre_save, sender=SchoolYear)
+def validate_active_school_year(sender, instance, **kwargs):
+    """S'assurer qu'une seule année scolaire est active par école"""
+    if instance.is_active:
+        SchoolYear.objects.filter(
+            school=instance.school,
+            is_active=True
+        ).exclude(pk=instance.pk).update(is_active=False)
+
+@receiver(pre_save, sender=TimeTablePeriod)
+def validate_active_period(sender, instance, **kwargs):
+    """S'assurer qu'une seule période est active par année scolaire"""
+    if instance.is_active:
+        TimeTablePeriod.objects.filter(
+            school_year=instance.school_year,
+            is_active=True
+        ).exclude(pk=instance.pk).update(is_active=False)
