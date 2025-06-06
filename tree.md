@@ -1,74 +1,36 @@
-my-react-app/
-│
-├── public/
-│   ├── index.html
-│   ├── favicon.ico
-│   └── manifest.json
-│
-├── src/
-│   ├── components/
-│   │   ├── common/
-│   │   │   ├── Button.js
-│   │   │   ├── Input.js
-│   │   │   └── Modal.js
-│   │   ├── layout/
-│   │   │   ├── Header.js
-│   │   │   ├── Footer.js
-│   │   │   └── Sidebar.js
-│   │   └── feature-specific/
-│   │       └── UserProfile.js
-│   │
-│   ├── pages/
-│   │   ├── Home.js
-│   │   ├── About.js
-│   │   ├── Dashboard.js
-│   │   └── NotFound.js
-│   │
-│   ├── hooks/
-│   │   ├── useAuth.js
-│   │   ├── useFetch.js
-│   │   └── useLocalStorage.js
-│   │
-│   ├── context/
-│   │   ├── AuthContext.js
-│   │   └── ThemeContext.js
-│   │
-│   ├── services/
-│   │   ├── api.js
-│   │   ├── authService.js
-│   │   └── userService.js
-│   │
-│   ├── utils/
-│   │   ├── helpers.js
-│   │   └── validation.js
-│   │
-│   ├── styles/
-│   │   ├── global.css
-│   │   ├── variables.css
-│   │   └── theme.css
-│   │
-│   ├── assets/
-│   │   ├── images/
-│   │   └── icons/
-│   │
-│   ├── routes/
-│   │   ├── PrivateRoute.js
-│   │   └── AppRoutes.js
-│   │
-│   ├── redux/ (optional - if using Redux)
-│   │   ├── store.js
-│   │   ├── rootReducer.js
-│   │   └── actions/
-│   │
-│   ├── App.js
-│   └── index.js
-│
-├── tests/
-│   ├── components/
-│   ├── pages/
-│   └── utils/
-│
-├── .gitignore
-├── package.json
-├── README.md
-└── tsconfig.json (or jsconfig.json)
+class Enrollment(TimeStampedModelWithUser):
+    student = models.ForeignKey(
+        "Student", 
+        on_delete=models.CASCADE, 
+        related_name="enrollments",
+        verbose_name=_("Élève")
+    )
+    classroom = models.ForeignKey(
+        "Classroom", 
+        on_delete=models.PROTECT, 
+        related_name="enrollments",
+        verbose_name=_("Classe")
+    )
+    school_year = models.ForeignKey(   # Changed from schoolyear to school_year
+        "SchoolYear", 
+        on_delete=models.PROTECT, 
+        related_name="enrollments",
+        verbose_name=_("Année scolaire")
+    )
+    enrollment_date = models.DateField(
+        auto_now_add=True,
+        verbose_name=_("Date d'inscription")
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Inscription active")
+    )
+
+    class Meta:
+        # ... constraints and indexes ...
+
+    def clean(self):
+        # ... validation using self.school_year ...
+
+    def __str__(self):
+        return f"{self.student.full_name} - {self.classroom.full_name} ({self.school_year.name})"
